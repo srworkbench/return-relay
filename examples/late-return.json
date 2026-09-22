@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "assets": ["CAM-A", "CAM-B", "CAM-C"],
+  "bookings": [
+    {"id": "PICKUP-1", "start": "2027-04-10T10:00Z", "end": "2027-04-10T14:00Z", "assigned": "CAM-A", "accepts": ["CAM-A", "CAM-B"]},
+    {"id": "PICKUP-2", "start": "2027-04-10T12:00Z", "end": "2027-04-10T16:00Z", "assigned": "CAM-B", "accepts": ["CAM-B", "CAM-C"]},
+    {"id": "PICKUP-3", "start": "2027-04-10T16:00Z", "end": "2027-04-10T18:00Z", "assigned": "CAM-C", "accepts": ["CAM-C"]}
+  ],
+  "unavailable": [{"asset": "CAM-A", "start": "2027-04-10T09:00Z", "end": "2027-04-10T15:00Z"}]
+}
