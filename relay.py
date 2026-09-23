@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 import shutil
-from datetime import datetime
+from datetime import datetime, timedelta
 from html import escape
 from pathlib import Path
 
@@ -40,13 +40,21 @@ def interval(row):
     return start, end
 
 
+def occupied(row):
+    start, end = interval(row)
+    try:
+        return start, end + timedelta(minutes=row.get("turnaround_minutes", 0))
+    except OverflowError as exc:
+        raise InputError("Turnaround extends beyond supported dates") from exc
+
+
 def overlap(left, right):
     return left[0] < right[1] and right[0] < left[1]
 
 
 def validate(data):
     fields(data, ['version', 'assets', 'bookings', 'unavailable'], 'snapshot')
-    if type(data['version']) is not int or data['version'] != 1:
+    if type(data['version']) is not int or data['version'] not in (1, 2):
         raise InputError('Unsupported snapshot version')
     assets = data['assets']
     if not isinstance(assets, list) or not 1 <= len(assets) <= 8:
@@ -58,7 +66,14 @@ def validate(data):
         raise InputError('Supply 1–14 bookings; this planner is for small disruption windows')
     seen = set()
     for row in bookings:
-        fields(row, ['id', 'start', 'end', 'assigned', 'accepts'], 'booking')
+        fields(row, ['id', 'start', 'end', 'assigned', 'accepts'] +
+               (['turnaround_minutes', 'locked'] if data['version'] == 2 else []), 'booking')
+        if data['version'] == 2:
+            if type(row['locked']) is not bool:
+                raise InputError('locked must be true or false')
+            if type(row['turnaround_minutes']) is not int or not 0 <= row['turnaround_minutes'] <= 10080:
+                raise InputError('turnaround_minutes must be an integer from 0 to 10080')
+        occupied(row)
         if ident(row['id']) in seen:
             raise InputError('Duplicate booking ID')
         seen.add(row['id'])
@@ -91,11 +106,11 @@ def conflicts(data, assignment):
     for i, row in enumerate(rows):
         asset = assignment[row['id']]
         for outage in data['unavailable']:
-            if asset == outage['asset'] and overlap(interval(row), interval(outage)):
+            if asset == outage['asset'] and overlap(occupied(row), interval(outage)):
                 result.append({'booking': row['id'], 'asset': asset, 'kind': 'unavailable',
                                'start': outage['start'], 'end': outage['end']})
         for other in rows[:i]:
-            if asset == assignment[other['id']] and overlap(interval(row), interval(other)):
+            if asset == assignment[other['id']] and overlap(occupied(row), occupied(other)):
                 result.append({'booking': row['id'], 'other': other['id'], 'asset': asset,
                                'kind': 'booking_overlap'})
     return result
@@ -106,10 +121,10 @@ def plan(data, node_limit=200000):
     if type(node_limit) is not int or node_limit < 1:
         raise InputError('Node limit must be a positive integer')
     rows = data['bookings']
-    windows = {r['id']: interval(r) for r in rows}
+    windows = {r['id']: occupied(r) for r in rows}
     original = {r['id']: r['assigned'] for r in rows}
     allowed = {
-        r['id']: sorted((a for a in r['accepts'] if not any(
+        r['id']: sorted((a for a in ([r['assigned']] if r.get('locked', False) else r['accepts']) if not any(
             o['asset'] == a and overlap(windows[r['id']], interval(o))
             for o in data['unavailable'])), key=lambda a: (a != r['assigned'], a))
         for r in rows
@@ -144,9 +159,11 @@ def plan(data, node_limit=200000):
     search(set(original), {}, 0)
     status = 'SEARCH_LIMIT' if exhausted else ('OPTIMAL' if best is not None else 'INFEASIBLE')
     # A budget-limited candidate is diagnostic, never an approved/minimal proposal.
-    return {'version': 1, 'input_sha256': fingerprint(data), 'status': status,
+    return {'version': 2, 'input_sha256': fingerprint(data), 'status': status,
             'nodes': nodes, 'node_limit': node_limit, 'before': original,
             'before_conflicts': conflicts(data, original), 'proposal': best,
+            'locked_bookings': sorted(r['id'] for r in rows if r.get('locked', False)),
+            'effective_end': {r['id']: occupied(r)[1].strftime('%Y-%m-%dT%H:%MZ') for r in rows},
             'changed_count': best_cost if best is not None else None,
             'changes': [{'booking': b, 'from': original[b], 'to': best[b]}
                         for b in sorted(original) if best is not None and best[b] != original[b]],
@@ -158,7 +175,7 @@ def plan(data, node_limit=200000):
 def render(data, result):
     """Actual allocation output, with a shared time axis for before and proposal."""
     rows = sorted(data['bookings'], key=lambda r: (r['start'], r['id']))
-    stamps = [t for r in rows + data['unavailable'] for t in interval(r)]
+    stamps = [t for r in rows for t in occupied(r)] + [t for r in data['unavailable'] for t in interval(r)]
     lo, hi = min(stamps), max(stamps)
     span = (hi - lo).total_seconds()
     height = 255 + len(data['assets']) * 104
@@ -200,9 +217,12 @@ def render(data, result):
                 color = '#ffb09d' if origin == 145 and row['id'] in bad else ('#71dfc1' if row['id'] in changed else '#a5c3f4')
                 yy = y + 8 + (lane % 2) * 33
                 out.append(f'<rect x="{x(a,origin):.2f}" y="{yy}" width="{max(1,x(b,origin)-x(a,origin)):.2f}" height="28" rx="3" fill="{color}"/>')
-                text(x(a,origin) + 4, yy + 20, row['id'], 15, '#101b2d')
+                if row.get('turnaround_minutes', 0):
+                    end = occupied(row)[1]
+                    out.append(f'<rect x="{x(b,origin):.2f}" y="{yy}" width="{x(end,origin)-x(b,origin):.2f}" height="28" fill="#edc66f"/>')
+                text(x(a,origin) + 4, yy + 20, row['id'] + (' *' if row.get('locked') else ''), 15, '#101b2d')
                 lane += 1
-    text(32, height-36, 'Red zone: unavailable  ·  Mint: reassigned  ·  Fixed booking times', 18, '#aebed5')
+    text(32, height-36, 'Red: unavailable  ·  Mint: reassigned  ·  Gold: turnaround  ·  * Locked', 18, '#aebed5')
     out.append('</svg>')
     return '\n'.join(out)
 

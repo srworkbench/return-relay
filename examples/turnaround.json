@@ -1,0 +1,53 @@
+{
+  "version": 2,
+  "assets": [
+    "CAM-A",
+    "CAM-B",
+    "CAM-C"
+  ],
+  "bookings": [
+    {
+      "id": "PICKUP-1",
+      "start": "2027-04-10T10:00Z",
+      "end": "2027-04-10T14:00Z",
+      "assigned": "CAM-A",
+      "accepts": [
+        "CAM-A",
+        "CAM-B"
+      ],
+      "turnaround_minutes": 0,
+      "locked": false
+    },
+    {
+      "id": "PICKUP-2",
+      "start": "2027-04-10T12:00Z",
+      "end": "2027-04-10T16:00Z",
+      "assigned": "CAM-B",
+      "accepts": [
+        "CAM-B",
+        "CAM-C"
+      ],
+      "turnaround_minutes": 30,
+      "locked": false
+    },
+    {
+      "id": "PICKUP-3",
+      "start": "2027-04-10T16:00Z",
+      "end": "2027-04-10T18:00Z",
+      "assigned": "CAM-C",
+      "accepts": [
+        "CAM-C",
+        "CAM-A"
+      ],
+      "turnaround_minutes": 0,
+      "locked": false
+    }
+  ],
+  "unavailable": [
+    {
+      "asset": "CAM-A",
+      "start": "2027-04-10T09:00Z",
+      "end": "2027-04-10T15:00Z"
+    }
+  ]
+}
