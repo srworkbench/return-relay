@@ -1,5 +1,7 @@
 """Small-fleet reassignment planner. Python 3.9+, standard library only."""
 import argparse
+import copy
+import csv
 import hashlib
 import json
 import re
@@ -238,20 +240,49 @@ def read_snapshot(path):
     return validate(json.loads(path.read_text(), object_pairs_hook=unique))
 
 
+def accept(data, proposal):
+    """Recompute instead of trusting editable proposal fields or just its input hash."""
+    validate(data)
+    if not isinstance(proposal, dict) or proposal.get('input_sha256') != fingerprint(data):
+        raise InputError('Snapshot changed since planning; generate and review a new proposal')
+    current = plan(data)
+    if current['status'] != 'OPTIMAL':
+        raise InputError('Only a proven complete optimal proposal can be accepted')
+    if proposal != current:
+        raise InputError('Proposal differs from the verified plan; generate and review it again')
+    updated = copy.deepcopy(data)
+    for booking in updated['bookings']:
+        booking['assigned'] = current['proposal'][booking['id']]
+    return updated
+
+
 def main():
     parser = argparse.ArgumentParser(description='Propose compatible rental-asset swaps after a disruption')
     parser.add_argument('snapshot', type=Path)
     parser.add_argument('--out', required=True, type=Path, help='New output directory; never overwritten')
+    parser.add_argument('--accept', type=Path, help='Reviewed plan.json to verify and export as an accepted snapshot')
     args = parser.parse_args()
     temp = None
     try:
         data = read_snapshot(args.snapshot)
         result = plan(data)
+        updated = accept(data, json.loads(args.accept.read_text())) if args.accept else None
         # mkdir is the exclusive claim. Never overwrite a prior run, including a symlink.
         args.out.mkdir(parents=False, exist_ok=False)
         temp = args.out
         (temp / 'plan.json').write_text(json.dumps(result, indent=2) + '\n')
         (temp / 'comparison.svg').write_text(render(data, result))
+        if updated is not None:
+            (temp / 'accepted-snapshot.json').write_text(json.dumps(updated, indent=2) + '\n')
+            with (temp / 'dispatch.csv').open('w', newline='') as stream:
+                writer = csv.writer(stream)
+                writer.writerow(['booking', 'asset', 'pickup_utc', 'return_utc', 'ready_again_utc', 'locked'])
+                for booking in sorted(updated['bookings'], key=lambda b: (b['start'], b['id'])):
+                    writer.writerow([booking['id'], booking['assigned'], booking['start'], booking['end'],
+                                     result['effective_end'][booking['id']], booking.get('locked', False)])
+            (temp / 'acceptance.json').write_text(json.dumps({
+                'source_sha256': fingerprint(data), 'accepted_sha256': fingerprint(updated),
+                'changes': result['changes'], 'external_calendar_updated': False}, indent=2) + '\n')
         print(json.dumps({'status': result['status'], 'changed_count': result['changed_count'],
                           'conflicts_before': len(result['before_conflicts']), 'out': str(args.out)}))
         temp = None
