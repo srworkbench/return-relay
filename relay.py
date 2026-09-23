@@ -243,7 +243,17 @@ def read_snapshot(path):
 def render_dispatch(data, result):
     """Readable decision cards generated from the exact proposed assignments."""
     rows = sorted(data['bookings'], key=lambda b: (b['start'], b['id']))
-    height = 220 + 145 * len(rows)
+    settled = result['status'] == 'OPTIMAL'
+    relaxed = copy.deepcopy(data)
+    for row in relaxed['bookings']:
+        if 'turnaround_minutes' in row:
+            row['turnaround_minutes'] = 0
+    naive = plan(relaxed)
+    witnesses = conflicts(data, naive['proposal']) if naive['status'] == 'OPTIMAL' else []
+    added = [w for w in witnesses if w not in conflicts(relaxed, naive['proposal'])] if witnesses else []
+    show_counterexample = settled and bool(added)
+    offset = 195 if show_counterexample else 0
+    height = 220 + offset + 145 * len(rows)
     parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="900" height="{height}" viewBox="0 0 900 {height}">',
              '<title>Return Relay proposed dispatch</title><rect width="100%" height="100%" fill="#102138"/>']
 
@@ -251,13 +261,26 @@ def render_dispatch(data, result):
         parts.append(f'<text x="{x}" y="{y}" font-family="Arial,sans-serif" font-size="{size}" fill="{color}">{escape(str(label))}</text>')
 
     text(36, 58, 'Return Relay · proposed dispatch', 36)
-    text(36, 107, f'{result["status"]} · {result["changed_count"] if result["proposal"] else 0} asset swaps', 32, '#75dfc0')
-    text(36, 148, 'Pickup times preserved. Turnaround included.', 26)
+    headline = f'{result["changed_count"]} asset swaps · all bookings fit' if settled else 'No accepted dispatch plan'
+    text(36, 107, headline, 32, '#75dfc0' if settled else '#ffc18f')
+    text(36, 148, 'Pickup times preserved. Turnaround included.' if settled else result['status'] + ' · review constraints and replan', 26)
+    if show_counterexample:
+        w = added[0]
+        parts.append('<rect x="26" y="168" width="848" height="184" rx="12" fill="#533142"/>')
+        text(44, 207, f'Ignoring turnaround: {naive["changed_count"]} swaps look sufficient', 29, '#ffd6ba')
+        if w['kind'] == 'booking_overlap':
+            pair = sorted([r for r in rows if r['id'] in (w['booking'], w['other'])], key=lambda r: r['start'])
+            first, second = pair
+            text(44, 250, f'{w["asset"]}: ready {occupied(first)[1].strftime("%H:%M")} vs pickup {minute(second["start"]).strftime("%H:%M")}', 32)
+            text(44, 291, f'Return {minute(first["end"]).strftime("%H:%M")} + {first.get("turnaround_minutes",0)} min turnaround', 27)
+        else:
+            text(44, 250, f'{w["asset"]}: turnaround overlaps unavailability', 28)
+        text(44, 331, 'The proposal below includes the extra constraint.', 24, '#ffd6ba')
     for i, row in enumerate(rows):
-        y = 175 + i * 145
+        y = 175 + offset + i * 145
         parts.append(f'<rect x="26" y="{y}" width="848" height="129" rx="12" fill="#203752"/>')
         text(44, y + 34, row['id'] + (' · LOCKED' if row.get('locked') else ''), 26)
-        target = result['proposal'][row['id']] if result['proposal'] else 'UNRESOLVED'
+        target = result['proposal'][row['id']] if settled else 'UNRESOLVED'
         label = f'{row["assigned"]} → {target}'
         text(44, y + 74, label, min(30, 1200 / max(1, len(label))), '#75dfc0')
         text(44, y + 109, f'{row["start"]} · ready again {result["effective_end"][row["id"]]}', 21)

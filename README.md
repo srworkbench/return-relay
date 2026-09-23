@@ -41,3 +41,12 @@ python3 relay.py examples/turnaround.json --accept proposal/plan.json --out acce
 Review the proposal and physical readiness before running the second command. Acceptance checks the exact input fingerprint and recomputes the complete proposal. Changed input or an edited plan is refused. The new directory contains `accepted-snapshot.json`, `dispatch.csv`, an acceptance receipt and the comparison. Keep the original input and use the accepted snapshot as the next planning input. These files record your decision; your booking system still needs updating. No external booking is changed by this command.
 
 The current interface requires manual JSON entry. Operator usability, timeline readability at small sizes and independent release review are still pending. Large-fleet scheduling, automatic substitution judgments and live inventory synchronization are outside this draft's scope.
+
+
+## Build a complete disruption window
+
+Start from your authoritative booking calendar. List every compatible asset you may use, every overlapping reservation on those assets, all locked/check-out assignments, and their unavailability. Include bookings whose turnaround extends into the window and later pickups reached by those turnaround tails. Repeat that overlap check until no included booking or buffer reaches an omitted reservation. Do not select only the initially affected booking: the second and third pickups in the example are necessary to discover the collision. A reservation omitted from the snapshot cannot constrain this solver.
+
+Keep the booking system as the source of truth. Before accepting, compare that system with the snapshot again: asset readiness, new bookings, changed times, substitution permissions and locks. If anything changed, update the snapshot and generate/review a new proposal. The fingerprint catches edits to the supplied snapshot; it cannot detect an external calendar change that you have not entered.
+
+After acceptance, transfer every change in `acceptance.json` to the authoritative calendar, using `dispatch.csv` to check each booking ID, asset, pickup and ready-again time. Re-read the calendar and mark your own reconciliation complete only after all changes match. Acceptance is a file export, not a transaction in the booking system. If an external update fails midway, preserve the exported plan, take a fresh snapshot of actual assignments, and replan; do not assume a partly applied chain is safe. Avoid concurrent booking edits during this handoff. Use a managed rental platform when manual reconciliation is unsuitable.
